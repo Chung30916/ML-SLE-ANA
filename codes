@@ -26,3 +26,820 @@ from sklearn.pipeline import Pipeline
 import shap
 import lime
 import lime.lime_tabular
+
+df_1 = pd.read_csv('../SLE_ANA_df_1_impute.csv')
+df_2 = pd.read_csv('../SLE_ANA_df_2_impute.csv')
+
+print(df_1.shape)
+print(df_2.shape)
+
+
+COL_NAME = df_1.columns.tolist()
+COL_NAME.remove('Outcome')
+COL_NAME.append('Outcome')
+
+
+df_1 = df_1[COL_NAME]
+print(df_1.shape)
+
+for i in np.arange(0, df_1.shape[1]-1):
+    if df_1.iloc[:, i].isnull().sum() > 0:
+        print(i)
+
+
+Numeric_col = ['age','anti_dsDNA','Erythrocyte','Hematocrit','C3','C4','Erythrocyte_mean_corpuscular_volume',
+               'Neutrophils100_leukocytes','Basophils100_leukocytes','Monocytes100_leukocytes','Eosinophils100_leukocytes',
+               'Platelets','Erythrocyte_distribution_width','Erythrocyte_mean_corpuscular_hemoglobin',
+               'Erythrocyte_mean_corpuscular_hemoglobin_concentration','WBC','HgB','serum_creatinine','eGFR',
+               'PRS','PRS_pos50','PRS_neg50']
+Num_scaler = RobustScaler()          #  = (value-median)/IQR  (means = q75-q25)
+df_1[Numeric_col] = Num_scaler.fit_transform(df_1[Numeric_col])
+
+
+Binary_col = ['sex','DM','HTN','Hlip','Cyclophos','Cyclospor','Glucoco','Hydroxy',
+              'Immagent','Imuran','index_ANA_1','index_ANA_2','index_ANA_3',
+              'AC1','AC4','AC5','AC19','AC24','Outcome']
+
+for j in range(df_1.shape[1]):
+    if df_1.columns[j] in Binary_col:
+        df_1[df_1.columns[j]] = df_1[df_1.columns[j]].astype(int)
+
+
+df_1 = shuffle(df_1, random_state=777).reset_index(drop=True)
+df_1.head()
+
+
+df_2 = df_2[COL_NAME]
+print(df_2.shape)
+
+for i in np.arange(0, df_2.shape[1]-1):
+    if df_2.iloc[:, i].isnull().sum() > 0:
+        print(i)
+
+
+df_2[Numeric_col] = Num_scaler.transform(df_2[Numeric_col])
+
+
+for j in range(df_2.shape[1]):
+    if df_2.columns[j] in Binary_col:
+        df_2[df_2.columns[j]] = df_2[df_2.columns[j]].astype(int)
+
+
+df_2 = shuffle(df_2, random_state=33).reset_index(drop=True)
+df_2.head()
+
+df = pd.concat([df_1, df_2])
+df = df.reset_index(drop=True)
+df = shuffle(df, random_state=623).reset_index(drop=True)
+X = df.iloc[:,:-1]
+Y = df.iloc[:,-1]
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, 
+                                                    test_size = 0.2, shuffle = True, random_state = 11, stratify = Y)
+
+X_train, Y_train = TomekLinks().fit_resample(X_train, Y_train)
+X_train, Y_train = SMOTE(random_state=202305).fit_resample(X_train, Y_train)
+
+print(X_train.shape)
+print(Y_train.shape)
+print('-----------')
+print(X_test.shape)
+print(Y_test.shape)
+
+Logistic = LogisticRegression(random_state=0)
+
+starttime = time.time()
+#########################
+
+tuned_parameters = {'C':[0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1,
+                         0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9,
+                         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+                    'penalty':['l1','l2'],
+                    'class_weight':['auto','balanced','None'],
+                    'solver':['newton-cg','lbfgs','liblinear','sag','saga']
+                   }
+
+skf = StratifiedKFold(n_splits = 5)
+LR = GridSearchCV(Logistic, tuned_parameters, cv = skf, scoring = 'recall')
+LR.fit(X_train,Y_train)
+print(LR.best_params_)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+###----------  Model Performance：Testing dataset  ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = LogisticRegression(C=0.01,class_weight='balanced',penalty='l1',
+                             solver='saga',random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+Y_pred = np.where(Y_pred_prob > 0.5, 1, 0)
+
+print('Accuracy = ' + str(round(accuracy_score(Target_outcome, Y_pred),4)))
+print('Precision = ' + str(round(precision_score(Target_outcome, Y_pred),4)))
+print('Recall = ' + str(round(recall_score(Target_outcome, Y_pred),4)))
+print('Specificity = ' + str(round(recall_score(Target_outcome, Y_pred, pos_label=0),4)))
+print('F1 = ' + str(round(f1_score(Target_outcome, Y_pred),4)))
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- Data of ROC Curve ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = LogisticRegression(C=0.01,class_weight='balanced',penalty='l1',
+                             solver='saga',random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+false_positive_rate, true_positive_rate, thresholds = roc_curve(Target_outcome, Y_pred_prob)
+fpr = pd.DataFrame(false_positive_rate)
+tpr = pd.DataFrame(true_positive_rate)
+ROC_data = pd.concat([fpr, tpr], axis=1)
+ROC_data.columns = ['fpr', 'tpr']
+ROC_data.to_csv('ROC_Curve_data_SLE_ANA_LR.csv', index=False)
+
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+
+###---------- Data of Precision-Recall Curve (PR Curve) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = LogisticRegression(C=0.01,class_weight='balanced',penalty='l1',
+                             solver='saga',random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+precision_temp, recall_temp, thresholds_temp = precision_recall_curve(Target_outcome, Y_pred_prob)
+precision_data = pd.DataFrame(precision_temp)
+recall_data = pd.DataFrame(recall_temp)
+PR_data = pd.concat([precision_data, recall_data], axis=1)
+PR_data.columns = ['precision', 'recall']
+PR_data.to_csv('PR_Curve_data_SLE_ANA_LR.csv', index=False)
+
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###------------------------ Bootstrapping validation ------------------------###
+n_iteration = 500        # 100
+ratio_boot = 0.8         # 0.5
+auc_res = []
+
+
+starttime = time.time()
+#########################
+
+for i in range(n_iteration):
+    data_train_boot = df_train.sample(frac=ratio_boot, replace=True)    # random_state=0
+    X_train_boot = data_train_boot.iloc[:,:-1]
+    Y_train_boot = data_train_boot.iloc[:,-1]
+    
+    Logistic = LogisticRegression(C=0.01,class_weight='balanced',penalty='l1',
+                             solver='saga', random_state=0)
+    Logistic.fit(X_train_boot, Y_train_boot)
+    Log_Y_pred = Logistic.predict_proba(X_test)[:,1]
+    auc_boot = metrics.roc_auc_score(Y_test, Log_Y_pred)
+    auc_res.append(auc_boot)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+
+alpha = 0.05
+lower = round(max(0.0, np.percentile(auc_res, alpha/2*100)), 4)
+upper = round(min(1.0, np.percentile(auc_res, 100-alpha/2*100)), 4)
+print('95% confidence interval is ' + str(round(np.mean(auc_res),4)) + ' (' + str(lower) + ', ' + str(upper) + ')')
+
+
+
+RandomForest = RandomForestClassifier(random_state=0)
+
+starttime = time.time()
+#########################
+
+tuned_parameters = {'n_estimators':[100,200,300,400,500],
+                    'criterion':['gini','entropy'],
+                    'max_depth':range(1,10,2),
+                    'min_samples_split':range(1,10,2),
+                    'min_samples_leaf':range(1,10,2),
+                    'class_weight':['balanced','balanced_subsample','None']
+                   }
+
+skf = StratifiedKFold(n_splits = 5)
+RF = GridSearchCV(RandomForest, tuned_parameters, cv = skf, scoring = 'recall')
+RF.fit(X_train,Y_train)
+print(RF.best_params_)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+###----------  Model Performance：Testing dataset  ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = RandomForestClassifier(n_estimators=150, criterion='gini', 
+                                 max_depth=23, min_samples_leaf=1, min_samples_split=5,
+                                 class_weight='balanced', random_state=5672)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+Y_pred = np.where(Y_pred_prob > 0.5, 1, 0)
+
+print('Accuracy = ' + str(round(accuracy_score(Target_outcome, Y_pred),4)))
+print('Precision = ' + str(round(precision_score(Target_outcome, Y_pred),4)))
+print('Recall = ' + str(round(recall_score(Target_outcome, Y_pred),4)))
+print('Specificity = ' + str(round(recall_score(Target_outcome, Y_pred, pos_label=0),4)))
+print('F1 = ' + str(round(f1_score(Target_outcome, Y_pred),4)))
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+
+###---------- SHAP Values (Shapley additive explanations) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+COL_NAME_SHAP = Target_df.columns.tolist()
+COL_NAME_SHAP[8] = 'Hydroxychloroquine' ; COL_NAME_SHAP[11] = 'Anti-dsDNA ab'
+COL_NAME_SHAP[19] = 'Monocytes' ; COL_NAME_SHAP[29] = 'ANA 1:80'
+COL_NAME_SHAP[30] = 'ANA 1:160 & 1:320' ; COL_NAME_SHAP[31] = 'ANA ≥ 1:640'
+COL_NAME_SHAP[69] = 'PRSw+' ; COL_NAME_SHAP[70] = 'PRSw-'
+
+MLmodel = RandomForestClassifier(n_estimators=150, criterion='gini', 
+                                 max_depth=23, min_samples_leaf=1, min_samples_split=5,
+                                 class_weight='balanced', random_state=5672)
+MLmodel.fit(X_train, Y_train)
+shap_values = shap.TreeExplainer(MLmodel).shap_values(Target_df)
+shap.summary_plot(shap_values[1], Target_df, max_display=20, feature_names=COL_NAME_SHAP, show=False)
+
+plt.savefig('SHAP_values_SLE_ANA_RF.tiff', dpi=300, bbox_inches='tight', pad_inches=0)
+
+###---------- Data of ROC Curve ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = RandomForestClassifier(n_estimators=150, criterion='gini', 
+                                 max_depth=23, min_samples_leaf=1, min_samples_split=5,
+                                 class_weight='balanced', random_state=5672)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+false_positive_rate, true_positive_rate, thresholds = roc_curve(Target_outcome, Y_pred_prob)
+fpr = pd.DataFrame(false_positive_rate)
+tpr = pd.DataFrame(true_positive_rate)
+ROC_data = pd.concat([fpr, tpr], axis=1)
+ROC_data.columns = ['fpr', 'tpr']
+ROC_data.to_csv('ROC_Curve_data_SLE_ANA_RF.csv', index=False)
+
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+
+###---------- Data of Precision-Recall Curve (PR Curve) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = RandomForestClassifier(n_estimators=150, criterion='gini', 
+                                 max_depth=23, min_samples_leaf=1, min_samples_split=5,
+                                 class_weight='balanced', random_state=5672)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+precision_temp, recall_temp, thresholds_temp = precision_recall_curve(Target_outcome, Y_pred_prob)
+precision_data = pd.DataFrame(precision_temp)
+recall_data = pd.DataFrame(recall_temp)
+PR_data = pd.concat([precision_data, recall_data], axis=1)
+PR_data.columns = ['precision', 'recall']
+PR_data.to_csv('PR_Curve_data_SLE_ANA_RF.csv', index=False)
+
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- AUC ----------###
+RandomForest = RandomForestClassifier(n_estimators=150, criterion='gini', 
+                                 max_depth=23, min_samples_leaf=1, min_samples_split=5,
+                                 class_weight='balanced', random_state=5672)
+k_fold = StratifiedKFold(n_splits=5, random_state=2023, shuffle=True)
+results = cross_val_score(RandomForest, X_train, Y_train, cv=k_fold, scoring='roc_auc')
+results
+
+###------------------------ Bootstrapping validation ------------------------###
+n_iteration = 500        # 100
+ratio_boot = 0.8         # 0.5
+auc_res = []
+
+
+starttime = time.time()
+#########################
+
+for i in range(n_iteration):
+    data_train_boot = df_train.sample(frac=ratio_boot, replace=True)    # random_state=0
+    X_train_boot = data_train_boot.iloc[:,:-1]
+    Y_train_boot = data_train_boot.iloc[:,-1]
+    
+    RandomForest = RandomForestClassifier(n_estimators=150, criterion='gini', 
+                                 max_depth=23, min_samples_leaf=1, min_samples_split=5,
+                                 class_weight='balanced')   # , random_state=5672
+    RandomForest.fit(X_train_boot, Y_train_boot)
+    Ran_Y_pred = RandomForest.predict_proba(X_test)[:,1]
+    auc_boot = metrics.roc_auc_score(Y_test, Ran_Y_pred)
+    auc_res.append(auc_boot)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+
+
+alpha = 0.05
+lower = round(max(0.0, np.percentile(auc_res, alpha/2*100)), 4)
+upper = round(min(1.0, np.percentile(auc_res, 100-alpha/2*100)), 4)
+print('95% confidence interval is ' + str(round(np.mean(auc_res),4)) + ' (' + str(lower) + ', ' + str(upper) + ')')
+
+Support = SVC(probability=True, random_state=0)
+
+starttime = time.time()
+#########################
+
+tuned_parameters = {'kernel':['linear','poly','rbf','sigmoid'],
+                    'C': [1, 10, 50, 100, 150],
+                    'gamma':['scale', 'auto', 0.001, 0.005, 0.01],
+                    'degree':range(1,6,1),
+                    'tol':[0.0001, 0.001, 0.01]
+                   }
+
+skf = StratifiedKFold(n_splits = 5)
+SV = GridSearchCV(Support, tuned_parameters, cv = skf, scoring = 'recall')
+SV.fit(X_train,Y_train)
+print(SV.best_params_)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+###----------  Model Performance：Testing dataset  ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = SVC(C=6,degree=2,gamma=5e-05,kernel='rbf',
+              tol=1e-05,probability=True, random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+Y_pred = np.where(Y_pred_prob > 0.5, 1, 0)
+
+print('Accuracy = ' + str(round(accuracy_score(Target_outcome, Y_pred),4)))
+print('Precision = ' + str(round(precision_score(Target_outcome, Y_pred),4)))
+print('Recall = ' + str(round(recall_score(Target_outcome, Y_pred),4)))
+print('Specificity = ' + str(round(recall_score(Target_outcome, Y_pred, pos_label=0),4)))
+print('F1 = ' + str(round(f1_score(Target_outcome, Y_pred),4)))
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- Data of ROC Curve ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = SVC(C=6,degree=2,gamma=5e-05,kernel='rbf',
+              tol=1e-05,probability=True, random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+false_positive_rate, true_positive_rate, thresholds = roc_curve(Target_outcome, Y_pred_prob)
+fpr = pd.DataFrame(false_positive_rate)
+tpr = pd.DataFrame(true_positive_rate)
+ROC_data = pd.concat([fpr, tpr], axis=1)
+ROC_data.columns = ['fpr', 'tpr']
+ROC_data.to_csv('ROC_Curve_data_SLE_ANA_SVM.csv', index=False)
+
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+
+###---------- Data of Precision-Recall Curve (PR Curve) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = SVC(C=6,degree=2,gamma=5e-05,kernel='rbf',
+              tol=1e-05,probability=True, random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+precision_temp, recall_temp, thresholds_temp = precision_recall_curve(Target_outcome, Y_pred_prob)
+precision_data = pd.DataFrame(precision_temp)
+recall_data = pd.DataFrame(recall_temp)
+PR_data = pd.concat([precision_data, recall_data], axis=1)
+PR_data.columns = ['precision', 'recall']
+PR_data.to_csv('PR_Curve_data_SLE_ANA_SVM.csv', index=False)
+
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- AUC ----------###
+Support = SVC(C=6,degree=2,gamma=5e-05,kernel='rbf',
+              tol=1e-05,probability=True, random_state=0)
+k_fold = StratifiedKFold(n_splits=5, random_state=2023, shuffle=True)
+results = cross_val_score(Support, X_train, Y_train, cv=k_fold, scoring='roc_auc')
+results
+
+###------------------------ Bootstrapping validation ------------------------###
+n_iteration = 500        # 100
+ratio_boot = 0.8         # 0.5
+auc_res = []
+
+
+starttime = time.time()
+#########################
+
+for i in range(n_iteration):
+    data_train_boot = df_train.sample(frac=ratio_boot, replace=True)    # random_state=0
+    X_train_boot = data_train_boot.iloc[:,:-1]
+    Y_train_boot = data_train_boot.iloc[:,-1]
+    
+    Support = SVC(C=6,degree=2,gamma=5e-05,kernel='rbf',
+              tol=1e-05,probability=True, random_state=0)
+    Support.fit(X_train_boot, Y_train_boot)
+    Sup_Y_pred = Support.predict_proba(X_test)[:,1]
+    auc_boot = metrics.roc_auc_score(Y_test, Sup_Y_pred)
+    auc_res.append(auc_boot)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+
+
+alpha = 0.05
+lower = round(max(0.0, np.percentile(auc_res, alpha/2*100)), 4)
+upper = round(min(1.0, np.percentile(auc_res, 100-alpha/2*100)), 4)
+print('95% confidence interval is ' + str(round(np.mean(auc_res),4)) + ' (' + str(lower) + ', ' + str(upper) + ')')
+
+LGBM = LGBMClassifier(random_state=0)
+
+starttime = time.time()
+#########################
+
+tuned_parameters = {"boosting_type":['gbdt','dart','goss'],
+                    "learning_rate":[0.001,0.005,0.01,0.05,0.1,0.15,0.2,0.25],
+                    "n_estimators":[100,200,300,400,500],
+                    "num_leaves":range(1,16,2),
+                    "max_depth":range(1,16,2),
+                    "class_weight":['balanced',None],
+                    "min_child_samples":range(10,30,3),
+                    "min_child_weight":[0.0001, 0.0005, 0.001, 0.005, 0.01],
+                    "subsample":[0.8,0.9,1.0]
+                   }
+
+skf = StratifiedKFold(n_splits = 5)
+LG = GridSearchCV(LGBM, tuned_parameters, cv = skf, scoring = 'recall', n_jobs=-1, verbose=10)
+LG.fit(X_train, Y_train)
+print(LG.best_params_)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+###----------  Model Performance：Testing dataset  ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = LGBMClassifier(boosting_type='gbdt',learning_rate=0.15,n_estimators=150,num_leaves=9,
+                         max_depth=7,class_weight='balanced',min_child_samples=3,
+                         min_child_weight=0.005,subsample=0.7,random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+Y_pred = np.where(Y_pred_prob > 0.5, 1, 0)
+
+print('Accuracy = ' + str(round(accuracy_score(Target_outcome, Y_pred),4)))
+print('Precision = ' + str(round(precision_score(Target_outcome, Y_pred),4)))
+print('Recall = ' + str(round(recall_score(Target_outcome, Y_pred),4)))
+print('Specificity = ' + str(round(recall_score(Target_outcome, Y_pred, pos_label=0),4)))
+print('F1 = ' + str(round(f1_score(Target_outcome, Y_pred),4)))
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- Data of ROC Curve ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = LGBMClassifier(boosting_type='gbdt',learning_rate=0.15,n_estimators=150,num_leaves=9,
+                         max_depth=7,class_weight='balanced',min_child_samples=3,
+                         min_child_weight=0.005,subsample=0.7,random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+false_positive_rate, true_positive_rate, thresholds = roc_curve(Target_outcome, Y_pred_prob)
+fpr = pd.DataFrame(false_positive_rate)
+tpr = pd.DataFrame(true_positive_rate)
+ROC_data = pd.concat([fpr, tpr], axis=1)
+ROC_data.columns = ['fpr', 'tpr']
+ROC_data.to_csv('ROC_Curve_data_SLE_ANA_LGBM.csv', index=False)
+
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+
+###---------- Data of Precision-Recall Curve (PR Curve) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = LGBMClassifier(boosting_type='gbdt',learning_rate=0.15,n_estimators=150,num_leaves=9,
+                         max_depth=7,class_weight='balanced',min_child_samples=3,
+                         min_child_weight=0.005,subsample=0.7,random_state=0)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+precision_temp, recall_temp, thresholds_temp = precision_recall_curve(Target_outcome, Y_pred_prob)
+precision_data = pd.DataFrame(precision_temp)
+recall_data = pd.DataFrame(recall_temp)
+PR_data = pd.concat([precision_data, recall_data], axis=1)
+PR_data.columns = ['precision', 'recall']
+PR_data.to_csv('PR_Curve_data_SLE_ANA_LGBM.csv', index=False)
+
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- AUC ----------###
+GTB = LGBMClassifier(boosting_type='gbdt',learning_rate=0.15,n_estimators=150,num_leaves=9,
+                         max_depth=7,class_weight='balanced',min_child_samples=3,
+                         min_child_weight=0.005,subsample=0.7,random_state=0)
+k_fold = StratifiedKFold(n_splits=5, random_state=2023, shuffle=True)
+results = cross_val_score(GTB, X_train, Y_train, cv=k_fold, scoring='roc_auc')
+results
+
+###------------------------ Bootstrapping validation ------------------------###
+n_iteration = 500        # 100
+ratio_boot = 0.8         # 0.5
+auc_res = []
+
+
+starttime = time.time()
+#########################
+
+for i in range(n_iteration):
+    data_train_boot = df_train.sample(frac=ratio_boot, replace=True)    # random_state=0
+    X_train_boot = data_train_boot.iloc[:,:-1]
+    Y_train_boot = data_train_boot.iloc[:,-1]
+    
+    GTB = LGBMClassifier(boosting_type='gbdt',learning_rate=0.15,n_estimators=150,num_leaves=9,
+                         max_depth=7,class_weight='balanced',min_child_samples=3,
+                         min_child_weight=0.005,subsample=0.7,random_state=0)
+    GTB.fit(X_train_boot, Y_train_boot)
+    GTB_Y_pred = GTB.predict_proba(X_test)[:,1]
+    auc_boot = metrics.roc_auc_score(Y_test, GTB_Y_pred)
+    auc_res.append(auc_boot)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+
+
+alpha = 0.05
+lower = round(max(0.0, np.percentile(auc_res, alpha/2*100)), 4)
+upper = round(min(1.0, np.percentile(auc_res, 100-alpha/2*100)), 4)
+print('95% confidence interval is ' + str(round(np.mean(auc_res),4)) + ' (' + str(lower) + ', ' + str(upper) + ')')
+
+GTB = GradientBoostingClassifier(random_state=0)
+
+starttime = time.time()
+#########################
+
+tuned_parameters = {"learning_rate":[0.001,0.005,0.01,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4],
+                    "n_estimators":range(50,501,50),
+                    "min_samples_leaf":range(1,16,2),
+                    "min_samples_split":range(1,6,2),
+                    "max_depth":range(1,6,2),
+                    "max_leaf_nodes":range(1,6,2),
+                    "max_features":[40, 50, 60, 70],
+                    "tol":[0.0001, 0.001, 0.01]
+                   }
+
+skf = StratifiedKFold(n_splits = 5)
+GB = GridSearchCV(GTB, tuned_parameters, cv = skf, scoring = 'recall', n_jobs=-1, verbose=10)
+GB.fit(X_train,Y_train)
+print(GB.best_params_)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')   # 
+
+###----------  Model Performance：Testing dataset  ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = GradientBoostingClassifier(learning_rate=0.30,n_estimators=300,min_samples_leaf=11,
+                                     min_samples_split=1,max_depth=3,max_leaf_nodes=5,
+                                     max_features=60,tol=1e-05,random_state=8)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+Y_pred = np.where(Y_pred_prob > 0.5, 1, 0)
+
+print('Accuracy = ' + str(round(accuracy_score(Target_outcome, Y_pred),4)))
+print('Precision = ' + str(round(precision_score(Target_outcome, Y_pred),4)))
+print('Recall = ' + str(round(recall_score(Target_outcome, Y_pred),4)))
+print('Specificity = ' + str(round(recall_score(Target_outcome, Y_pred, pos_label=0),4)))
+print('F1 = ' + str(round(f1_score(Target_outcome, Y_pred),4)))
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- Data of ROC Curve ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = GradientBoostingClassifier(learning_rate=0.30,n_estimators=300,min_samples_leaf=11,
+                                     min_samples_split=3,max_depth=3,max_leaf_nodes=5,
+                                     max_features=60,tol=1e-05,random_state=8)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+false_positive_rate, true_positive_rate, thresholds = roc_curve(Target_outcome, Y_pred_prob)
+fpr = pd.DataFrame(false_positive_rate)
+tpr = pd.DataFrame(true_positive_rate)
+ROC_data = pd.concat([fpr, tpr], axis=1)
+ROC_data.columns = ['fpr', 'tpr']
+ROC_data.to_csv('ROC_Curve_data_SLE_ANA_GTB.csv', index=False)
+
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+
+###---------- Data of Precision-Recall Curve (PR Curve) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = GradientBoostingClassifier(learning_rate=0.30,n_estimators=300,min_samples_leaf=11,
+                                     min_samples_split=1,max_depth=3,max_leaf_nodes=5,
+                                     max_features=60,tol=1e-05,random_state=8)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+precision_temp, recall_temp, thresholds_temp = precision_recall_curve(Target_outcome, Y_pred_prob)
+precision_data = pd.DataFrame(precision_temp)
+recall_data = pd.DataFrame(recall_temp)
+PR_data = pd.concat([precision_data, recall_data], axis=1)
+PR_data.columns = ['precision', 'recall']
+PR_data.to_csv('PR_Curve_data_SLE_ANA_GTB.csv', index=False)
+
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- AUC ----------###
+GTB = GradientBoostingClassifier(learning_rate=0.30,n_estimators=300,min_samples_leaf=11,
+                                     min_samples_split=3,max_depth=3,max_leaf_nodes=5,
+                                     max_features=60,tol=1e-05,random_state=8)
+k_fold = StratifiedKFold(n_splits=5, random_state=2023, shuffle=True)
+results = cross_val_score(GTB, X_train, Y_train, cv=k_fold, scoring='roc_auc')
+results
+
+###------------------------ Bootstrapping validation ------------------------###
+n_iteration = 500        # 100
+ratio_boot = 0.8         # 0.5
+auc_res = []
+
+
+starttime = time.time()
+#########################
+
+for i in range(n_iteration):
+    data_train_boot = df_train.sample(frac=ratio_boot, replace=True)    # random_state=0
+    X_train_boot = data_train_boot.iloc[:,:-1]
+    Y_train_boot = data_train_boot.iloc[:,-1]
+    
+    GTB = GradientBoostingClassifier(learning_rate=0.30,n_estimators=300,min_samples_leaf=11,
+                                     min_samples_split=3,max_depth=3,max_leaf_nodes=5,
+                                     max_features=60,tol=1e-05,random_state=8)
+    GTB.fit(X_train_boot, Y_train_boot)
+    GTB_Y_pred = GTB.predict_proba(X_test)[:,1]
+    auc_boot = metrics.roc_auc_score(Y_test, GTB_Y_pred)
+    auc_res.append(auc_boot)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+
+
+alpha = 0.05
+lower = round(max(0.0, np.percentile(auc_res, alpha/2*100)), 4)
+upper = round(min(1.0, np.percentile(auc_res, 100-alpha/2*100)), 4)
+print('95% confidence interval is ' + str(round(np.mean(auc_res),4)) + ' (' + str(lower) + ', ' + str(upper) + ')')
+
+XGB = XGBClassifier(random_state=0)
+
+starttime = time.time()
+#########################
+
+tuned_parameters = {"booster":['gbtree','gblinear','dart'],
+                    "learning_rate":[0.0005, 0.001, 0.005, 0.01, 0.05],
+                    "n_estimators":[100,200,300,400],
+                    "max_depth":range(1,10,2),
+                    "max_leaves":range(1,10,2),
+                    "gamma":[0, 0.05, 0.1, 0.15, 0.2],
+                    "min_child_weight":[0.0001, 0.0005, 0.001, 0.005, 0.01],
+                    "subsample":[0.8,0.9,1.0]
+                   }
+
+skf = StratifiedKFold(n_splits = 5)
+XG = GridSearchCV(XGB, tuned_parameters, cv = skf, scoring = 'recall', n_jobs=-1, verbose=10)
+XG.fit(X_train,Y_train)
+print(XG.best_params_)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')    # 26967.876 sec
+
+###----------  Model Performance：Testing dataset  ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+# XGBClassifier(booster='gblinear',learning_rate=0.20,n_estimators=100,random_state=10)  
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+Y_pred = np.where(Y_pred_prob > 0.5, 1, 0)
+
+print('Accuracy = ' + str(round(accuracy_score(Target_outcome, Y_pred),4)))
+print('Precision = ' + str(round(precision_score(Target_outcome, Y_pred),4)))
+print('Recall = ' + str(round(recall_score(Target_outcome, Y_pred),4)))
+print('Specificity = ' + str(round(recall_score(Target_outcome, Y_pred, pos_label=0),4)))
+print('F1 = ' + str(round(f1_score(Target_outcome, Y_pred),4)))
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- SHAP Values (Shapley additive explanations) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+COL_NAME_SHAP = Target_df.columns.tolist()
+COL_NAME_SHAP[8] = 'Hydroxychloroquine' ; COL_NAME_SHAP[11] = 'Anti-dsDNA ab'
+COL_NAME_SHAP[19] = 'Monocytes' ; COL_NAME_SHAP[29] = 'ANA 1:80'
+COL_NAME_SHAP[30] = 'ANA 1:160 & 1:320' ; COL_NAME_SHAP[31] = 'ANA ≥ 1:640'
+COL_NAME_SHAP[69] = 'PRSw+' ; COL_NAME_SHAP[70] = 'PRSw-'
+
+MLmodel = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+MLmodel.fit(X_train, Y_train)
+shap_values = shap.TreeExplainer(MLmodel).shap_values(Target_df)
+shap.summary_plot(shap_values, Target_df, max_display=20, feature_names=COL_NAME_SHAP, show=False)
+
+plt.savefig('SHAP_values_SLE_ANA_XGB.tiff', dpi=300, bbox_inches='tight', pad_inches=0)
+
+###---------- Data of ROC Curve ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+false_positive_rate, true_positive_rate, thresholds = roc_curve(Target_outcome, Y_pred_prob)
+fpr = pd.DataFrame(false_positive_rate)
+tpr = pd.DataFrame(true_positive_rate)
+ROC_data = pd.concat([fpr, tpr], axis=1)
+ROC_data.columns = ['fpr', 'tpr']
+ROC_data.to_csv('ROC_Curve_data_SLE_ANA_XGB.csv', index=False)
+
+print('AUC = ' + str(round(roc_auc_score(Target_outcome, Y_pred_prob),4)))
+
+###---------- Data of Precision-Recall Curve (PR Curve) ----------###
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+
+MLmodel.fit(X_train, Y_train)
+Y_pred_prob = MLmodel.predict_proba(Target_df)[:,1]
+precision_temp, recall_temp, thresholds_temp = precision_recall_curve(Target_outcome, Y_pred_prob)
+precision_data = pd.DataFrame(precision_temp)
+recall_data = pd.DataFrame(recall_temp)
+PR_data = pd.concat([precision_data, recall_data], axis=1)
+PR_data.columns = ['precision', 'recall']
+PR_data.to_csv('PR_Curve_data_SLE_ANA_XGB.csv', index=False)
+
+print('AP = ' + str(round(average_precision_score(Target_outcome, Y_pred_prob), 4)))
+
+###---------- AUC ----------###
+XGB = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+k_fold = StratifiedKFold(n_splits=5, random_state=2023, shuffle=True)
+results = cross_val_score(XGB, X_train, Y_train, cv=k_fold, scoring='roc_auc')
+results
+
+###------------------------ Bootstrapping validation ------------------------###
+n_iteration = 500        # 100
+ratio_boot = 0.8         # 0.5
+auc_res = []
+
+
+starttime = time.time()
+#########################
+
+for i in range(n_iteration):
+    data_train_boot = df_train.sample(frac=ratio_boot, replace=True)    # random_state=0
+    X_train_boot = data_train_boot.iloc[:,:-1]
+    Y_train_boot = data_train_boot.iloc[:,-1]
+    
+    XGB = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+    XGB.fit(X_train_boot, Y_train_boot)
+    XGB_Y_pred = XGB.predict_proba(X_test)[:,1]
+    auc_boot = metrics.roc_auc_score(Y_test, XGB_Y_pred)
+    auc_res.append(auc_boot)
+
+#########################
+endtime = time.time() ; print('It cost',round(endtime-starttime,3),'sec')
+
+
+
+alpha = 0.05
+lower = round(max(0.0, np.percentile(auc_res, alpha/2*100)), 4)
+upper = round(min(1.0, np.percentile(auc_res, 100-alpha/2*100)), 4)
+print('95% confidence interval is ' + str(round(np.mean(auc_res),4)) + ' (' + str(lower) + ', ' + str(upper) + ')')
+
+
+
+Target_df = X_test ; Target_outcome = Y_test
+MLmodel = XGBClassifier(booster='gbtree',learning_rate=0.4,n_estimators=50,max_depth=15,
+              max_leaves=1,gamma=0.2,min_child_weight=1e-06,subsample=0.8,random_state=10759)
+
+MLmodel.fit(X_train, Y_train)
+
+explainer = lime.lime_tabular.LimeTabularExplainer(X_train.values,
+                                                   feature_names = X_train.columns,
+                                                   training_labels = Y_train,
+                                                   class_names = ['non-SLE', 'SLE'],
+                                                   mode = 'classification')
+
+Target_df = Target_df.reset_index(drop=True)
+Target_outcome = Target_outcome.reset_index(drop=True)
+
+j = 477
+print("True outcome : " + str(Target_outcome[j]))
+print("Predicted probability of SLE : " + str(round(MLmodel.predict_proba(Target_df)[:,1][j],4)))
+
+
+exp = explainer.explain_instance(Target_df.values[j], MLmodel.predict_proba, num_features = 15) # len(Target_df.columns)
+# get the list of explanation tuples
+exp_list = exp.as_list()
+# exp.show_in_notebook(show_table=True)
+
+# get the feature names and values from the explanations
+feature_names = [x[0] for x in exp_list][::-1]
+values = [x[1] for x in exp_list][::-1]
+
+colors = [(1, 0, 0, 0.8) if x > 0 else 'limegreen' for x in values]
+
+plt.figure(figsize=(3,5.5), facecolor='white')
+plt.barh(feature_names, values, color=colors, height=0.45)
+plt.tick_params(axis='x', which='major', labelsize=10)
+plt.tick_params(axis='y', which='major', labelsize=12)
+plt.title("Predicted probability of SLE : 0.732")
+
+plt.savefig('lime_SLE_ANA_80.tiff', format='tiff', dpi=300, bbox_inches='tight')
